@@ -1,21 +1,41 @@
 name: Custom-Windows-Build
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch: # 允许手动在 Actions 页面点击运行
 
 jobs:
   build:
     name: Build Custom Client
     runs-on: windows-2022
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4 # 升级到 v4
+      # 1. 拉取源码及所有子模块 (使用最新 v4)
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
         with:
-          submodules: recursive 
+          submodules: recursive
 
-      - name: Patch Config
+      # 2. 安装 LLVM 编译工具链 (解决 C++ 依赖报错)
+      - name: Install LLVM and Clang
+        run: choco install llvm -y
+
+      # 3. 安装 vcpkg (解决 hwcodec 依赖)
+      - name: Install vcpkg
+        run: |
+          cd C:\
+          git clone https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      # 4. 安装 Rust 核心环境
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      # 5. 核心：强制注入你的私服配置
+      - name: Inject Server Configuration
         shell: pwsh
         run: |
-          # 自动定位并修改硬编码地址
           $files = Get-ChildItem -Recurse -Filter "config.rs"
           foreach ($f in $files) {
               $content = Get-Content $f.FullName
@@ -24,21 +44,31 @@ jobs:
                   $content = $content -replace 'get_option\("relay-server"\)', '"${{ secrets.RS_RELAY_SERVER }}"'
                   $content = $content -replace 'get_option\("key"\)', '"${{ secrets.RS_PUB_KEY }}"'
                   $content | Set-Content $f.FullName
-                  Write-Host "已成功注入配置到: $($f.FullName)"
+                  Write-Host "✅ 成功注入私服地址与 Key 到: $($f.FullName)"
               }
           }
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build Executable
+      # 6. 核心：隐藏 Flutter 界面中的“设置”按钮
+      - name: Hide UI Settings
         shell: pwsh
         run: |
-          # 根据你的仓库版本，如果 build.py 不存在，请尝试直接使用 cargo 编译
+          $uiFile = Get-ChildItem -Recurse -Filter "common.dart" | Where-Object { $_.FullName -match "flutter" } | Select-Object -First 1
+          if ($uiFile) {
+              (Get-Content $uiFile.FullName) -replace 'visible: true', 'visible: false' | Set-Content $uiFile.FullName
+              Write-Host "✅ 成功锁定客户端设置界面"
+          }
+
+      # 7. 开始编译可执行文件
+      - name: Build RustDesk Executable
+        shell: pwsh
+        run: |
+          # 运行官方构建脚本
+          # 如果这里依然因为 hwcodec 报错，可以将下一行改为: cargo build --release 
           python build.py --hwcodec
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4 # 核心修复点：必须是 v4
+      # 8. 上传成品供下载 (使用最新 v4)
+      - name: Upload Final Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: My-RustDesk-Custom
+          name: RustDesk-Trader-Custom
           path: target/release/rustdesk.exe
