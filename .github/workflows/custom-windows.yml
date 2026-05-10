@@ -1,0 +1,44 @@
+name: Custom-Windows-Build
+on:
+  workflow_dispatch: # 允许你手动点击运行
+
+jobs:
+  build:
+    name: Build Custom Client
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive # 确保下载所有子模块
+
+      - name: Patch Config
+        shell: pwsh
+        run: |
+          # 自动定位并修改硬编码地址
+          $files = Get-ChildItem -Recurse -Filter "config.rs"
+          foreach ($f in $files) {
+              $content = Get-Content $f.FullName
+              if ($content -match 'get_option\("id-server"\)') {
+                  $content = $content -replace 'get_option\("id-server"\)', '"${{ secrets.RS_ID_SERVER }}"'
+                  $content = $content -replace 'get_option\("relay-server"\)', '"${{ secrets.RS_RELAY_SERVER }}"'
+                  $content = $content -replace 'get_option\("key"\)', '"${{ secrets.RS_PUB_KEY }}"'
+                  $content | Set-Content $f.FullName
+                  Write-Host "已成功注入配置到: $($f.FullName)"
+              }
+          }
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Executable
+        shell: pwsh
+        run: |
+          # 调用官方构建脚本 (根据仓库版本可能为 build.py 或直接 cargo)
+          python build.py --hwcodec
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: My-RustDesk-Custom
+          path: target/release/rustdesk.exe
